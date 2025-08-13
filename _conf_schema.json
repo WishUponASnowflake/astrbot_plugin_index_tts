@@ -1,0 +1,56 @@
+{
+    "if_remove_think_tag": {
+        "description": "是否去除<think></think>",
+        "type": "bool",
+        "hint": "因为deepseek-r1模型及其衍生模型会以<think>.....</think>的形式输出思考过程，会影响语音合成，如果不是使用deepseek-r1模型及其衍生模型则可忽略",
+        "obvious_hint": true
+    },
+    "if_reduce_parenthesis": {
+        "description": "是否提醒llm减少括号中内容生成",
+        "type": "bool",
+        "hint": "有些人格设置会影响该设置生效，请酌情使用"
+    },
+    "misc":{
+        "description": "配置",
+        "type": "object",
+        "items": {
+            "prompt_wav":{
+                "description": "源音频文件",
+                "type": "string",
+                "hint": "源语音",
+                "default": ""
+            },
+            "model_ver":{
+                "description": "模型版本",
+                "type": "string",
+                "options": ["1","1.5"],
+                "hint": "模型版本，默认为IndexTTS-1.5版本",
+                "default": "1.5"
+            }
+        }
+    },
+    "serve_config":{
+        "description": "服务器设置",
+        "type": "object",
+        "items": {
+            "server_ip":{
+                "description": "服务器地址",
+                "type": "string",
+                "hint": "若为本机使用则不需要更改,即127.0.0.1",
+                "default": "127.0.0.1"
+            },
+            "if_seperate_serve": {
+                "description": "是否使用分布式部署",
+                "type": "bool",
+                "hint": "开启此选项后，本插件就不会自己启动service.py了，且按照服务器地址去访问api",
+                "default": false
+            },
+            "CORRECT_API_KEY": {
+                "description": "api密钥",
+                "type": "string",
+                "hint": "自定义的api密钥，用于验证请求",
+                "default": "1145141919810"
+            }
+        }
+    }
+}
