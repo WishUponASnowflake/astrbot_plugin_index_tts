@@ -294,7 +294,7 @@ class AstrbotPluginIndexTTS(Star):
                 logger.error(f"TTS插件初始化失败: {str(e)}")
                 raise
 
-    @filter.on_llm_request()
-    async def on_call_llm(self, event: AstrMessageEvent, req: ProviderRequest):
-        if self.reduce_parenthesis:
-            req.system_prompt += "请在输出的字段中减少使用括号括起对动作,心情,表情等的描写，尽量只剩下口语部分"
+        @filter.on_llm_request()
+        async def on_call_llm(self, event: AstrMessageEvent, req: ProviderRequest):
+            if self.reduce_parenthesis:
+                req.system_prompt += "请在输出的字段中减少使用括号括起对动作,心情,表情等的描写，尽量只剩下口语部分"

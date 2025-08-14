@@ -126,12 +126,13 @@ async def generate_speech(
         if not input_text:
             return ""
 
+        #TODO：使用线程池
         if not service.if_preload and not service.if_loaded:
             logging.info("Loading model...")
             service.load_model()
 
         if service.model is not None:
-            service.model.infer(service.prompt_wav, speech_request.input, service.output_path)
+            service.model.infer(service.prompt_wav, input_text, service.output_path)
             logging.info(f"Speech generating at {service.output_path}")
         else:
             raise HTTPException(status_code=500, detail="Model not loaded")
