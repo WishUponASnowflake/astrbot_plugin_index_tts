@@ -257,44 +257,45 @@ class AstrbotPluginIndexTTS(Star):
         outputs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
         os.makedirs(outputs_dir, exist_ok=True)
         
-        @filter.on_astrbot_loaded()
-        async def on_astrbot_loaded(self):
-            try:
-                await TTSManager.download_repo()
+    @filter.on_astrbot_loaded()
+    async def on_astrbot_loaded(self):
+        try:
+            await TTSManager.download_repo()
                 
-                if not self.if_seperate_serve:
-                    child_process = TTSManager.start_child_process()
-                    global on_init
-                    on_init = False
-                    if child_process:
-                        TTSManager.terminate_child_process_on_exit(child_process)
-                        logger.info("TTS服务子进程已启动")
+            if not self.if_seperate_serve:
+                child_process = TTSManager.start_child_process()
+                global on_init
+                on_init = False
+                if child_process:
+                    TTSManager.terminate_child_process_on_exit(child_process)
+                    logger.info("TTS服务子进程已启动")
 
-                await asyncio.sleep(10)  # 等待服务启动
+            await asyncio.sleep(3)  # 等待服务启动
 
                 # 检查服务是否可用
-                try:
-                    await TTSManager.post_with_session_auth(
-                        self.server_ip,
-                        "5210",
-                        self.if_remove_think_tag,
-                        self.if_preload,
-                        self.prompt_wav,
-                        self.CORRECT_API_KEY,
-                        self.model_ver,
-                        timeout_seconds=30.0  # 首次连接使用较短超时
-                    )
-                except Exception as e:
-                    logger.error(f"初始服务连接失败: {str(e)}")
-                    if not self.if_seperate_serve and child_process:
-                        child_process.terminate()
-                    raise
-
+            try:
+                await TTSManager.post_with_session_auth(
+                    self.server_ip,
+                    "5210",
+                    self.if_remove_think_tag,
+                    self.if_preload,
+                    self.prompt_wav,
+                    self.CORRECT_API_KEY,
+                    self.model_ver,
+                    timeout_seconds=30.0  # 首次连接使用较短超时
+                )
             except Exception as e:
-                logger.error(f"TTS插件初始化失败: {str(e)}")
+                logger.error(f"初始服务连接失败: {str(e)}")
+                if not self.if_seperate_serve and child_process:
+                    child_process.terminate()
                 raise
 
-        @filter.on_llm_request()
-        async def on_call_llm(self, event: AstrMessageEvent, req: ProviderRequest):
-            if self.reduce_parenthesis:
-                req.system_prompt += "请在输出的字段中减少使用括号括起对动作,心情,表情等的描写，尽量只剩下口语部分"
+        except Exception as e:
+            logger.error(f"TTS插件初始化失败: {str(e)}")
+            raise
+
+    @filter.on_llm_request()
+    async def on_call_llm(self, event: AstrMessageEvent, req: ProviderRequest):
+        if self.reduce_parenthesis:
+
+            req.system_prompt += "请在输出的字段中减少使用括号括起对动作,心情,表情等的描写，尽量只剩下口语部分"
