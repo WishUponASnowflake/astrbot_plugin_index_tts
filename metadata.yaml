@@ -1,7 +1,7 @@
 name: astrbot_plugin_index_tts
 desc: 基于index-tts对AstrBot的语音转文字(TTS)补充 
 help: 与官方tts方法一致，配置时用openai_tts_api，api填入127.0.0.1:5210，key随意，详情见repo
-version: v0.0.1
+version: v1.0.0
 author: xiewoc 
 repo: https://github.com/xiewoc/astrbot_plugin_index_tts
 
