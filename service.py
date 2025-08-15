@@ -7,9 +7,16 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import logging
+import asyncio
 from pydub import AudioSegment
+from concurrent.futures import ThreadPoolExecutor
 
 logging.getLogger("pydub").setLevel(logging.WARNING)
+
+port = 5210
+
+# 在服务类或模块级别创建线程池
+thread_pool = ThreadPoolExecutor(max_workers=4)  # 根据你的服务器配置调整worker数量
 
 class TTSService:
     def __init__(self):
@@ -27,36 +34,41 @@ class TTSService:
         
         # 添加必要的路径到sys.path
         sys.path.insert(0, os.path.join(self.model_path, "index-tts"))
-        sys.path.append(os.path.join(self.model_path, "index-tts"))
+        #sys.path.append(os.path.join(self.model_path, "index-tts"))
 
-    def load_model(self, model_ver=None):
+    async def DownloadModel(self, model_ver=None):
+        """下载并加载TTS模型"""
+        model_ver = model_ver or self.model_ver
+        if model_ver not in ["1", "1.5"]:
+            raise ValueError("Unsupported model version. Supported versions are '1' and '1.5'.")
+
+        from modelscope import snapshot_download
+        actual_model_path = os.path.join(self.model_path, f"IndexTTS{'-1.5' if model_ver == '1.5' else ''}")
+
+        if not os.path.exists(actual_model_path):
+            logging.info(f"Downloading model version {model_ver} to {actual_model_path}...")
+            snapshot_download(f"IndexTeam/Index-TTS{'-1.5' if model_ver == '1.5' else ''}", local_dir=actual_model_path)
+        else:
+            logging.warning(f"Model path {actual_model_path} already exists, skipping download.")
+
+    async def load_model(self, model_ver=None):
         """加载TTS模型"""
         model_ver = model_ver or self.model_ver
-        actual_model_path = self.model_path
+
+        if model_ver == "1":
+            actual_model_path = os.path.join(self.model_path, "IndexTTS")
+        elif model_ver == "1.5":
+            actual_model_path = os.path.join(self.model_path, "IndexTTS-1.5")
         
         if not os.path.exists(actual_model_path):
-            logging.error(f"Model path {actual_model_path} does not exist.")
-            logging.info(f"Downloading model to {actual_model_path}...")
-            
-            from modelscope import snapshot_download 
-            if model_ver == "1":
-                actual_model_path = os.path.join(actual_model_path, "IndexTTS")
-                snapshot_download("IndexTeam/Index-TTS", local_dir=actual_model_path)
-            elif model_ver == "1.5":
-                actual_model_path = os.path.join(actual_model_path, "IndexTTS-1.5")
-                snapshot_download("IndexTeam/IndexTTS-1.5", local_dir=actual_model_path)
-        else:
-            logging.info(f"Model path {actual_model_path} already exists, skipping download.")
-            if model_ver == "1":
-                actual_model_path = os.path.join(actual_model_path, "IndexTTS")
-            elif model_ver == "1.5":
-                actual_model_path = os.path.join(actual_model_path, "IndexTTS-1.5")
+            await self.DownloadModel(model_ver)
 
         cfg_path = os.path.join(actual_model_path, "config.yaml")
         logging.info(f"Using model path: {actual_model_path}")
         logging.info(f"Using config path: {cfg_path}")
 
         from indextts.infer import IndexTTS
+
         self.model = IndexTTS(model_dir=actual_model_path, cfg_path=cfg_path)
         if self.model is None:
             logging.error("Failed to load model.")
@@ -71,15 +83,6 @@ class TTSService:
         if text:
             return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
         return ''
-
-    @staticmethod
-    def wav2mp3(wav_path, script_path):
-        """将WAV转换为MP3"""
-        audio = AudioSegment.from_wav(wav_path)
-        mp3_path = os.path.join(script_path, "output.mp3")
-        audio.export(mp3_path, format="mp3", parameters=["-loglevel", "quiet"])
-        os.remove(wav_path)
-        return mp3_path
 
     async def verify_api_key(self, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
         """验证API密钥"""
@@ -124,15 +127,22 @@ async def generate_speech(
                     else speech_request.input)
         
         if not input_text:
-            return ""
+            return HTTPException(status_code=400, detail="Input text cannot be empty")
 
-        #TODO：使用线程池
+        # 使用线程池处理模型加载和推理
+        loop = asyncio.get_event_loop()
+        
+        # 如果模型未加载，不使用线程池加载，以防爆显存
         if not service.if_preload and not service.if_loaded:
             logging.info("Loading model...")
-            service.load_model()
+            await service.load_model(service.model_ver)
 
         if service.model is not None:
-            service.model.infer(service.prompt_wav, input_text, service.output_path)
+            # 使用线程池执行模型推理
+            await loop.run_in_executor(
+                thread_pool, 
+                lambda: service.model.infer(service.prompt_wav, input_text, service.output_path)
+            )
             logging.info(f"Speech generating at {service.output_path}")
         else:
             raise HTTPException(status_code=500, detail="Model not loaded")
@@ -170,15 +180,16 @@ async def update_config(config: Config):
     if config.if_preload is not None:
         service.if_preload = config.if_preload
         logging.info(f"已设置预加载: {service.if_preload}")
-        
+
         if service.if_preload and not service.if_loaded:
-            service.load_model()
+            await service.load_model()
+            service.if_loaded = True
             logging.info("模型已预加载")
 
     return {"message": "配置已更新"}
 
 def run_service():
-    uvicorn.run(app, host="0.0.0.0", port=5210)
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     logging.warning("This is a model service, you can't run this separately.")
