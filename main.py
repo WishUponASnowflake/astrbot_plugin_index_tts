@@ -22,7 +22,6 @@ port = "5210"  # 默认端口号
 
 # 锁文件路径
 lock_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "child_process.lock")
-child_process = None  # 全局子进程变量
 output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),"temp","output.wav")
 
 class RandomTTS:
@@ -370,6 +369,7 @@ class AstrbotPluginIndexTTS(Star):
         self.reduce_parenthesis = config.get('if_reduce_parenthesis', False)
         self.if_remove_think_tag = config.get("if_remove_think_tag", False)
         self.if_preload = False
+        self.child_process = None
 
         sub_config_misc = config.get('misc', {})
         sub_config_serve = config.get('serve_config', {})
@@ -401,9 +401,9 @@ class AstrbotPluginIndexTTS(Star):
             await manager.download_repo()
                 
             if not self.if_seperate_serve:
-                child_process = manager.start_child_process()
+                self.child_process = manager.start_child_process()
                 manager.on_init = False
-                if child_process:
+                if self.child_process:
                     logger.info("TTS服务子进程已启动")
 
             #await asyncio.sleep(2)  # 等待服务启动
@@ -427,8 +427,8 @@ class AstrbotPluginIndexTTS(Star):
                 )
             except Exception as e:
                 logger.error(f"初始服务连接失败: {str(e)}")
-                if not self.if_seperate_serve and child_process:
-                    child_process.terminate()
+                if not self.if_seperate_serve and self.child_process:
+                    self.child_process.terminate()
                 raise
 
         except Exception as e:
@@ -437,7 +437,7 @@ class AstrbotPluginIndexTTS(Star):
 
     async def terminate(self): 
         logger.info("已调用方法:Terminate,正在关闭")
-        manager.terminate_child_process(child_process)
+        manager.terminate_child_process(self.child_process)
 
     @filter.command_group("tts_cfg_it")
     def tts_cfg_it(self):
@@ -468,8 +468,8 @@ class AstrbotPluginIndexTTS(Star):
             )
         except Exception as e:
             logger.error(f"初始服务连接失败: {str(e)}")
-            if not self.if_seperate_serve and child_process:
-                child_process.terminate()
+            if not self.if_seperate_serve and self.child_process:
+                self.child_process.terminate()
             raise
 
     @filter.on_decorating_result()
