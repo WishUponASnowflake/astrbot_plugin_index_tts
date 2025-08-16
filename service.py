@@ -8,11 +8,11 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import logging
 import asyncio
-from pydub import AudioSegment
 from concurrent.futures import ThreadPoolExecutor
 
 logging.getLogger("pydub").setLevel(logging.WARNING)
 
+#端口设置在这里
 port = 5210
 
 # 在服务类或模块级别创建线程池
@@ -27,6 +27,7 @@ class TTSService:
         self.CORRECT_API_KEY = ""
         self.model_ver = "1.5"
         self.prompt_wav = ""
+        self.max_text_tokens_per_sentence = 100
         
         # 初始化路径
         self.model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)))
@@ -34,7 +35,6 @@ class TTSService:
         
         # 添加必要的路径到sys.path
         sys.path.insert(0, os.path.join(self.model_path, "index-tts"))
-        #sys.path.append(os.path.join(self.model_path, "index-tts"))
 
     async def DownloadModel(self, model_ver=None):
         """下载并加载TTS模型"""
@@ -43,6 +43,7 @@ class TTSService:
             raise ValueError("Unsupported model version. Supported versions are '1' and '1.5'.")
 
         from modelscope import snapshot_download
+
         actual_model_path = os.path.join(self.model_path, f"IndexTTS{'-1.5' if model_ver == '1.5' else ''}")
 
         if not os.path.exists(actual_model_path):
@@ -59,11 +60,15 @@ class TTSService:
             actual_model_path = os.path.join(self.model_path, "IndexTTS")
         elif model_ver == "1.5":
             actual_model_path = os.path.join(self.model_path, "IndexTTS-1.5")
+            
+        cfg_path = os.path.join(actual_model_path, "config.yaml")
         
         if not os.path.exists(actual_model_path):
-            await self.DownloadModel(model_ver)
+            try:
+                await self.DownloadModel(model_ver)
+            except:
+                raise
 
-        cfg_path = os.path.join(actual_model_path, "config.yaml")
         logging.info(f"Using model path: {actual_model_path}")
         logging.info(f"Using config path: {cfg_path}")
 
@@ -78,7 +83,7 @@ class TTSService:
         return self.model
 
     @staticmethod
-    def remove_thinktag(text):
+    def remove_thinktag(text): 
         """去除<think>标签"""
         if text:
             return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
@@ -113,6 +118,7 @@ class Config(BaseModel):
     if_preload: bool
     prompt_wav: str
     model_ver: str
+    max_text_tokens_per_sentence: int
     CORRECT_API_KEY: str
 
 @app.post("/audio/speech")
@@ -135,13 +141,13 @@ async def generate_speech(
         # 如果模型未加载，不使用线程池加载，以防爆显存
         if not service.if_preload and not service.if_loaded:
             logging.info("Loading model...")
-            await service.load_model(service.model_ver)
+            service.model = await service.load_model(service.model_ver)
 
         if service.model is not None:
             # 使用线程池执行模型推理
             await loop.run_in_executor(
                 thread_pool, 
-                lambda: service.model.infer(service.prompt_wav, input_text, service.output_path)
+                lambda: service.model.infer(service.prompt_wav, input_text, service.output_path, service.max_text_tokens_per_sentence)
             )
             logging.info(f"Speech generating at {service.output_path}")
         else:
@@ -173,6 +179,10 @@ async def update_config(config: Config):
         service.model_ver = config.model_ver
         logging.info(f"已设置模型版本: {service.model_ver}")
     
+    if config.max_text_tokens_per_sentence:
+        service.max_text_tokens_per_sentence = config.max_text_tokens_per_sentence
+        logging.info(f"已设置单句最大Token数: {service.max_text_tokens_per_sentence}")
+
     if config.CORRECT_API_KEY:
         service.CORRECT_API_KEY = config.CORRECT_API_KEY                # type: ignore
         logging.info(f"已设置API密钥: {service.CORRECT_API_KEY}")
@@ -182,7 +192,7 @@ async def update_config(config: Config):
         logging.info(f"已设置预加载: {service.if_preload}")
 
         if service.if_preload and not service.if_loaded:
-            await service.load_model()
+            service.model = await service.load_model()
             service.if_loaded = True
             logging.info("模型已预加载")
 

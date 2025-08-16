@@ -2,7 +2,7 @@
     "if_remove_think_tag": {
         "description": "是否去除<think></think>",
         "type": "bool",
-        "hint": "因为deepseek-r1模型及其衍生模型会以<think>.....</think>的形式输出思考过程，会影响语音合成，如果不是使用deepseek-r1模型及其衍生模型则可忽略",
+        "hint": "因为思考模型会以<think>.....</think>的形式输出思考过程，会影响语音合成，如果不是使用思考模型可忽略",
         "obvious_hint": true
     },
     "if_reduce_parenthesis": {
@@ -18,7 +18,7 @@
                 "description": "源音频文件",
                 "type": "string",
                 "hint": "源语音",
-                "default": ""
+                "default": "prompt_白芷.wav"
             },
             "model_ver":{
                 "description": "模型版本",
@@ -26,6 +26,22 @@
                 "options": ["1","1.5"],
                 "hint": "模型版本，默认为IndexTTS-1.5版本",
                 "default": "1.5"
+            },
+            "max_text_tokens_per_sentence":{
+                "description": "每个句子最多的Token数",
+                "type": "int",
+                "default": 100
+            },
+            "if_random_tts":{
+                "description": "是否开启随机TTS回复",
+                "type": "bool",
+                "default": false
+            },
+            "random_factor":{
+                "description": "随机因子",
+                "hint": "随机因子越大，事件概率越大，也就越容易触发",
+                "type": "float",
+                "default": 0.3
             }
         }
     },

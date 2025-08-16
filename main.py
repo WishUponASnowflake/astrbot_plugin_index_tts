@@ -13,23 +13,64 @@ import asyncio
 import atexit
 import sys
 import os
-from math import exp
+from random import random
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 #端口在这里改
 port = "5210"  # 默认端口号
 
-
 # 锁文件路径
 lock_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "child_process.lock")
-global on_init
-on_init = True  # 标记是否为初始化阶段
 child_process = None  # 全局子进程变量
 output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),"temp","output.wav")
 
+class RandomTTS:
+    """随机将文字转为语音"""
+    def __init__(self) -> None:
+        pass
+    
+    @staticmethod
+    async def RandomReplace(chain: list, random_factor: float, server_ip: str, CORRECT_API_KEY: str):
+        randfloat = random()
+        if randfloat <= random_factor:
+            logger.info(f"Random TTS triggered,factor: {randfloat} in {random_factor}")
+            if all(isinstance(e, Plain) for e in chain):                            #如果chain里都为Plain元素
+                text_parts = [msg.text for msg in chain if isinstance(msg, Plain)]     #将Plain中的text提取出来，组成列表
+                text_whole = ''.join(text_parts)                                    # 合并所有 Plain 消息的文本
+                chain.clear()                                                       #清除chain里的所有元素
+                if text_whole != "":
+                    try:
+                        wav_path = await manager.post_generate_request_with_session_auth(
+                            server_ip,
+                            port,
+                            text_whole,
+                            CORRECT_API_KEY,
+                            output_path,                                            #这里用全局定义的
+                            timeout_seconds=120.0                                   #不够用再改 
+                            )
+                        chain = [
+                            Record.fromFileSystem(wav_path)
+                        ]
+                    except Exception as e:                                          #返回纯文字以防止影响体验
+                        logger.error("Error when trying randomly send vocal message turn to plain text instead")
+                        chain = [
+                            Plain(text_whole)
+                        ]
+                    return chain
+                else:
+                    pass
+            else:
+                pass
+        else:
+            return chain
+
+randomtts = RandomTTS()
+
 class TTSManager:
     """TTS功能管理类"""
+    def __init__(self):
+        self.on_init = True  # 标记是否为初始化阶段
     
     @staticmethod
     async def post_config_with_session_auth(
@@ -40,6 +81,7 @@ class TTSManager:
         prompt_wav: str,
         CORRECT_API_KEY: str,
         model_ver: str,
+        max_text_tokens_per_sentence: int,
         timeout_seconds: Optional[float] = 60.0,
         max_retries: int = 20,
         initial_retry_delay: float = 1.0,
@@ -53,6 +95,7 @@ class TTSManager:
             "if_preload": if_preload,
             "prompt_wav": prompt_wav,
             "model_ver": model_ver,
+            "max_text_tokens_per_sentence": max_text_tokens_per_sentence,
             "CORRECT_API_KEY": CORRECT_API_KEY
         }
 
@@ -301,8 +344,7 @@ class TTSManager:
     def start_child_process():
         """启动子进程的函数"""
         if os.path.exists(lock_file_path):
-            global on_init
-            if on_init:
+            if manager.on_init:
                 TTSManager.cleanup()
             else:
                 logger.warning("Another instance is already running.")
@@ -317,6 +359,8 @@ class TTSManager:
         p.start()
         logger.info("Sub process started")
         return p
+    
+manager = TTSManager()
 
 @register("astrbot_plugin_index_tts", "xiewoc ", "基于index-tts对AstrBot的语音转文字(TTS)补充", "1.0.1", "https://github.com/xiewoc/astrbot_plugin_spark_tts")
 class AstrbotPluginIndexTTS(Star):
@@ -331,39 +375,42 @@ class AstrbotPluginIndexTTS(Star):
         sub_config_serve = config.get('serve_config', {})
         
         # 确保sounds目录存在
-        sounds_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sounds")
+        sounds_dir = Path(__file__).parent / "sounds"
         os.makedirs(sounds_dir, exist_ok=True)
         
         self.prompt_wav = os.path.join(
             sounds_dir,
             sub_config_misc.get("prompt_wav", "")
         )
-        self.model_ver = sub_config_misc.get("model_ver", "1.5")  # 添加默认值
-        self.server_ip = sub_config_serve.get("server_ip", "127.0.0.1")  # 添加默认值
+        self.model_ver = sub_config_misc.get("model_ver", "1.5") 
+        self.max_text_tokens_per_sentence = sub_config_misc.get("max_text_tokens_per_sentence",100)
+        self.if_random_tts = sub_config_misc.get("if_random_tts",False)
+        self.random_factor = sub_config_misc.get("random_factor",0.3)
+
+        self.server_ip = sub_config_serve.get("server_ip", "127.0.0.1")  
         self.if_seperate_serve = sub_config_serve.get("if_seperate_serve", False)
         self.CORRECT_API_KEY = sub_config_serve.get("CORRECT_API_KEY", "")
         
         # 确保outputs目录存在
-        outputs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+        outputs_dir = Path(__file__).parent / "outputs"
         os.makedirs(outputs_dir, exist_ok=True)
         
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         try:
-            await TTSManager.download_repo()
+            await manager.download_repo()
                 
             if not self.if_seperate_serve:
-                child_process = TTSManager.start_child_process()
-                global on_init
-                on_init = False
+                child_process = manager.start_child_process()
+                manager.on_init = False
                 if child_process:
                     logger.info("TTS服务子进程已启动")
 
-            await asyncio.sleep(10)  # 等待服务启动
+            #await asyncio.sleep(2)  # 等待服务启动
 
             # 检查服务是否可用
             try:
-                await TTSManager.post_config_with_session_auth(
+                await manager.post_config_with_session_auth(
                     self.server_ip,
                     port,
                     self.if_remove_think_tag,
@@ -371,7 +418,12 @@ class AstrbotPluginIndexTTS(Star):
                     self.prompt_wav,
                     self.CORRECT_API_KEY,
                     self.model_ver,
-                    timeout_seconds=30.0  # 首次连接使用较短超时
+                    self.max_text_tokens_per_sentence,
+                    timeout_seconds = 30.0,  # 首次连接使用较短超时
+                    max_retries = 10,
+                    initial_retry_delay = 1.0,
+                    max_retry_delay = 20.0,
+                    backoff_factor = 2.0
                 )
             except Exception as e:
                 logger.error(f"初始服务连接失败: {str(e)}")
@@ -380,17 +432,64 @@ class AstrbotPluginIndexTTS(Star):
                 raise
 
         except Exception as e:
-            logger.error(f"TTS插件初始化失败: {str(e)}")
+            logger.error(f"插件初始化失败: {str(e)}")
             raise
 
     async def terminate(self): 
-        TTSManager.terminate_child_process(child_process)
-        logger.info("TTS插件已清理锁文件")
+        logger.info("已调用方法:Terminate,正在关闭")
+        manager.terminate_child_process(child_process)
+
+    @filter.command_group("tts_cfg_it")
+    def tts_cfg_it(self):
+        pass
+    
+    @tts_cfg_it.group("set")
+    def set(self):
+        pass
+    
+    @set.command("voice")
+    async def voice(self, event: AstrMessageEvent, voice_name:str):
+        self.prompt_wav = str ( Path(__file__).parent / "sounds" / voice_name )
+        try:
+            await manager.post_config_with_session_auth(
+                self.server_ip,
+                port,
+                self.if_remove_think_tag,
+                self.if_preload,
+                self.prompt_wav,
+                self.CORRECT_API_KEY,
+                self.model_ver,
+                self.max_text_tokens_per_sentence,
+                timeout_seconds = 30.0,  # 首次连接使用较短超时
+                max_retries = 10,
+                initial_retry_delay = 1.0,
+                max_retry_delay = 20.0,
+                backoff_factor = 2.0
+            )
+        except Exception as e:
+            logger.error(f"初始服务连接失败: {str(e)}")
+            if not self.if_seperate_serve and child_process:
+                child_process.terminate()
+            raise
+
+    @filter.on_decorating_result()
+    async def on_decorating_result(self, event: AstrMessageEvent):
+        chain = event.get_result().chain
+        if self.if_random_tts:
+            chain = await randomtts.RandomReplace(
+                chain,
+                self.random_factor,
+                self.server_ip,
+                self.CORRECT_API_KEY
+                )
+        else:
+            pass
+        event.get_result().chain = chain
 
     @filter.on_llm_request()
     async def on_call_llm(self, event: AstrMessageEvent, req: ProviderRequest):
         if self.reduce_parenthesis:
-            req.system_prompt += "请在输出的字段中减少使用括号括起对动作,心情,表情等的描写，尽量只剩下口语部分"
+            req.system_prompt += "请简化输出文本，仅保留口语内容，删除描述动作、表情或心情的附加信息（如括号内的补充说明）。"
 
     @filter.llm_tool(name="send_vocal_msg_it")
     async def send_vocal_msg_it(self, event: AstrMessageEvent, text: str):
@@ -400,15 +499,22 @@ class AstrbotPluginIndexTTS(Star):
             text (string): 要转换为语音的文本内容
         '''
         if text != "" and text is not None:
-            wav_path = await TTSManager.post_generate_request_with_session_auth(
-                self.server_ip,
-                port,
-                text,
-                self.CORRECT_API_KEY,
-                output_path,
-                timeout_seconds=90.0
-                )
-        chain = [
-            Record.fromFileSystem(wav_path)
-        ]    
+            try:
+                wav_path = await manager.post_generate_request_with_session_auth(
+                    self.server_ip,
+                    port,
+                    text,
+                    self.CORRECT_API_KEY,
+                    output_path,
+                    timeout_seconds=90.0
+                    )
+                chain = [
+                    Record.fromFileSystem(wav_path)
+                ]
+            except:
+                chain = [
+                    Plain(text)
+                ]
+        else:
+            pass    
         yield event.chain_result(chain)
