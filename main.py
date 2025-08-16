@@ -487,7 +487,7 @@ class AstrbotPluginIndexTTS(Star):
         event.get_result().chain = chain
 
     @filter.on_llm_request()
-    async def on_call_llm(self, event: AstrMessageEvent, req: ProviderRequest):
+    async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
         if self.reduce_parenthesis:
             req.system_prompt += "请简化输出文本，仅保留口语内容，删除描述动作、表情或心情的附加信息（如括号内的补充说明）。"
 
@@ -511,7 +511,8 @@ class AstrbotPluginIndexTTS(Star):
                 chain = [
                     Record.fromFileSystem(wav_path)
                 ]
-            except:
+            except Exception as e:
+                logger.error(f"语音消息生成失败: {e}")
                 chain = [
                     Plain(text)
                 ]
