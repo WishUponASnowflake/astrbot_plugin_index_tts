@@ -15,8 +15,7 @@ logging.getLogger("pydub").setLevel(logging.WARNING)
 #端口设置在这里
 port = 5210
 
-# 在服务类或模块级别创建线程池
-thread_pool = ThreadPoolExecutor(max_workers=4)  # 根据你的服务器配置调整worker数量
+
 
 class TTSService:
     def __init__(self):
@@ -28,6 +27,7 @@ class TTSService:
         self.model_ver = "1.5"
         self.prompt_wav = ""
         self.max_text_tokens_per_sentence = 100
+        self.thread_pool: ThreadPoolExecutor
         
         # 初始化路径
         self.model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +48,14 @@ class TTSService:
 
         if not os.path.exists(actual_model_path):
             logging.info(f"Downloading model version {model_ver} to {actual_model_path}...")
-            snapshot_download(f"IndexTeam/Index-TTS{'-1.5' if model_ver == '1.5' else ''}", local_dir=actual_model_path)
+
+            # 使用线程池处理模型加载和推理
+            loop = asyncio.get_event_loop()
+
+            await loop.run_in_executor(
+                self.thread_pool, 
+                lambda: snapshot_download(f"IndexTeam/Index-TTS{'-1.5' if model_ver == '1.5' else ''}", local_dir=actual_model_path)
+            )
         else:
             logging.warning(f"Model path {actual_model_path} already exists, skipping download.")
 
@@ -60,7 +67,7 @@ class TTSService:
             actual_model_path = os.path.join(self.model_path, "IndexTTS")
         elif model_ver == "1.5":
             actual_model_path = os.path.join(self.model_path, "IndexTTS-1.5")
-            
+
         cfg_path = os.path.join(actual_model_path, "config.yaml")
         
         if not os.path.exists(actual_model_path):
@@ -104,8 +111,20 @@ class TTSService:
         return credentials.credentials
 
 # 初始化FastAPI应用和服务
-app = FastAPI()
 service = TTSService()
+app = FastAPI()
+
+def run_service():
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+@app.on_event("startup")
+async def start_up():
+    # 在服务类或模块级别创建线程池
+    service.thread_pool = ThreadPoolExecutor(max_workers=4)  # 根据你的服务器配置调整worker数量
+
+@app.on_event("shutdown")
+async def shut_down():
+    service.thread_pool.shutdown(wait=True)
 
 # 定义请求模型
 class SpeechRequest(BaseModel):
@@ -133,7 +152,7 @@ async def generate_speech(
                     else speech_request.input)
         
         if not input_text:
-            return HTTPException(status_code=400, detail="Input text cannot be empty")
+            raise HTTPException(status_code=400, detail="Input text cannot be empty")
 
         # 使用线程池处理模型加载和推理
         loop = asyncio.get_event_loop()
@@ -146,7 +165,7 @@ async def generate_speech(
         if service.model is not None:
             # 使用线程池执行模型推理
             await loop.run_in_executor(
-                thread_pool, 
+                service.thread_pool, 
                 lambda: service.model.infer(service.prompt_wav, input_text, service.output_path, service.max_text_tokens_per_sentence)
             )
             logging.info(f"Speech generating at {service.output_path}")
@@ -198,8 +217,6 @@ async def update_config(config: Config):
 
     return {"message": "配置已更新"}
 
-def run_service():
-    uvicorn.run(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     logging.warning("This is a model service, you can't run this separately.")
