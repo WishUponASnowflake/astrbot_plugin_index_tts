@@ -6,12 +6,11 @@ from astrbot.api.message_components import *                        # pyright: i
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path   # pyright: ignore[reportMissingImports]
 from multiprocessing import Process
 from astrbot.api import logger                                      # pyright: ignore[reportMissingImports] 
-from typing import Optional
+from typing import Callable, Optional, Any
 from pathlib import Path
 import aiohttp
 import asyncio
 import atexit
-import sys
 import os
 from random import random
 
@@ -70,22 +69,83 @@ class TTSManager:
     def __init__(self):
         self.on_init = True  # 标记是否为初始化阶段
     
-    @staticmethod
-    async def post_config_with_session_auth(
-        server_ip: str,
-        port: str,
-        prompt_wav: str,
-        CORRECT_API_KEY: str,
-        model_ver: str,
-        max_text_tokens_per_sentence: int,
-        timeout_seconds: Optional[float] = 60.0,
-        max_retries: int = 20,
-        initial_retry_delay: float = 1.0,
-        max_retry_delay: float = 60.0,
-        backoff_factor: float = 2.0,
-        **kwargs
-    ) -> dict:
-        """发送带认证的POST请求到指定服务器，具有自动重试机制"""
+
+    async def async_retry_request(
+            self,
+            request_func: Callable,
+            max_retries: int = 20,
+            initial_retry_delay: float = 1.0,
+            max_retry_delay: float = 60.0,
+            backoff_factor: float = 2.0,
+            retry_exceptions: tuple = (asyncio.TimeoutError, aiohttp.ClientError),
+            **kwargs
+        ) -> Any:
+        """
+        通用的异步重试请求函数
+        
+        Args:
+            request_func: 要执行的请求函数
+            max_retries: 最大重试次数
+            initial_retry_delay: 初始重试延迟（秒）
+            max_retry_delay: 最大重试延迟（秒）
+            backoff_factor: 退避因子
+            retry_exceptions: 需要重试的异常类型
+            **kwargs: 传递给请求函数的参数
+        
+        Returns:
+            请求函数的返回结果
+        
+        Raises:
+            ConnectionError: 所有重试都失败时抛出
+            Exception: 不可重试的异常
+        """
+        retry_count = 0
+        last_error = None
+        
+        while retry_count <= max_retries:
+            try:
+                result = await request_func(**kwargs)
+                return result
+                
+            except retry_exceptions as e:
+                last_error = e
+                retry_count += 1
+                if retry_count > max_retries:
+                    break
+                    
+                delay = min(
+                    initial_retry_delay * (backoff_factor ** (retry_count - 1)),
+                    max_retry_delay
+                )
+                
+                logger.warning(
+                    f"请求失败({str(e)}), 正在进行第 {retry_count}/{max_retries} 次重试, "
+                    f"等待 {delay:.1f} 秒后重试..."
+                )
+                
+                await asyncio.sleep(delay)
+                
+            except Exception as e:
+                logger.error(f"发生不可重试的错误: {str(e)}")
+                raise
+        
+        logger.error(f"所有重试均失败, 最后错误: {str(last_error)}")
+        raise ConnectionError(f"无法完成请求, 重试 {max_retries} 次后失败") from last_error
+
+
+    # 具体的请求函数
+    async def _post_config_request(
+            self,
+            server_ip: str,
+            port: str,
+            prompt_wav: str,
+            CORRECT_API_KEY: str,
+            model_ver: str,
+            max_text_tokens_per_sentence: int,
+            timeout_seconds: Optional[float] = 60.0,
+            **kwargs
+        ) -> dict:
+        """具体的POST配置请求实现"""
         url = f"http://{server_ip}:{port}/config"
         payload = {
             "prompt_wav": prompt_wav,
@@ -94,6 +154,8 @@ class TTSManager:
             "CORRECT_API_KEY": CORRECT_API_KEY
         }
         
+        # 处理可选参数
+        
         payload["if_remove_think_tag"] = kwargs["if_remove_think_tag"] if "if_remove_think_tag" in kwargs else False
         
         payload["if_preload"] = kwargs["if_preload"] if "if_preload" in kwargs else False
@@ -101,59 +163,112 @@ class TTSManager:
         payload["if_remove_emoji"] = kwargs["if_remove_emoji"] if "if_remove_emoji" in kwargs else False
 
         payload["if_split_text"] = kwargs["if_split_text"] if "if_split_text" in kwargs else False
-
+        
         headers = {
             'Authorization': f'Bearer {CORRECT_API_KEY}',
             'Accept': 'application/json',
             'Content-Type': 'application/json'
         }
         
-        retry_count = 0
-        last_error = None
-        
-        while retry_count <= max_retries:
-            timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+            async with session.post(url, json=payload) as response:
+                response.raise_for_status()
+                result = await response.json()
+                logger.info(f"请求成功: {result}")
+                return result
+
+    async def _post_generate_request(
+            self,
+            server_ip: str,
+            port: str,
+            text: str,
+            CORRECT_API_KEY: str,
+            output_path: str,
+            timeout_seconds: Optional[float] = 60.0,
+        ) -> str:
+            """具体的POST生成请求实现"""
+            url = f"http://{server_ip}:{port}/audio/speech"
+            payload = {
+                "model": "",
+                "input": text,
+                "voice": ""
+            }
+
+            headers = {
+                'Authorization': f'Bearer {CORRECT_API_KEY}',
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            }
             
-            try:
-                async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
-                    async with session.post(url, json=payload) as response:
-                        response.raise_for_status()
+            timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+            async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+                async with session.post(url, json=payload) as response:
+                    response.raise_for_status()
+                    
+                    # 检查响应内容类型
+                    content_type = response.headers.get('Content-Type', '')
+                    
+                    if 'audio/wav' in content_type or 'audio/x-wav' in content_type:
+                        # 处理音频文件响应
+                        output_path_path = Path(output_path)
+                        output_path_path.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        with open(output_path_path, 'wb') as f:
+                            while True:
+                                chunk = await response.content.read(1024)
+                                if not chunk:
+                                    break
+                                f.write(chunk)
+                        
+                        logger.info(f"音频文件成功保存到: {output_path_path}")
+                        return str(output_path_path)
+                    else:
+                        # 如果不是音频文件，尝试解析为JSON
                         result = await response.json()
                         logger.info(f"请求成功: {result}")
-                        return result
-                        
-            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
-                last_error = e
-                retry_count += 1
-                if retry_count > max_retries:
-                    break
-                    
-                delay = min(
-                    initial_retry_delay * (backoff_factor ** (retry_count - 1)),
-                    max_retry_delay
-                )
-                
-                logger.warning(
-                    f"请求失败({str(e)}), 正在进行第 {retry_count}/{max_retries} 次重试, "
-                    f"等待 {delay:.1f} 秒后重试..."
-                )
-                
-                await asyncio.sleep(delay)
-                
-            except Exception as e:
-                logger.error(f"发生不可重试的错误: {str(e)}")
-                raise
-        
-        logger.error(f"所有重试均失败, 最后错误: {str(last_error)}")
-        raise ConnectionError(f"无法连接到服务器, 重试 {max_retries} 次后失败") from last_error
-    
-    @staticmethod
+                    return result
+
+    # 重构后的原始方法
+    async def post_config_with_session_auth(
+            self,
+            server_ip: str,
+            port: str,
+            prompt_wav: str,
+            CORRECT_API_KEY: str,
+            model_ver: str,
+            max_text_tokens_per_sentence: int,
+            timeout_seconds: Optional[float] = 60.0,
+            max_retries: int = 20,
+            initial_retry_delay: float = 1.0,
+            max_retry_delay: float = 60.0,
+            backoff_factor: float = 2.0,
+            **kwargs
+        ) -> dict:
+        """发送带认证的POST请求到指定服务器，具有自动重试机制"""
+        return await self.async_retry_request(
+            request_func=self._post_config_request,
+            max_retries=max_retries,
+            initial_retry_delay=initial_retry_delay,
+            max_retry_delay=max_retry_delay,
+            backoff_factor=backoff_factor,
+            server_ip=server_ip,
+            port=port,
+            prompt_wav=prompt_wav,
+            CORRECT_API_KEY=CORRECT_API_KEY,
+            model_ver=model_ver,
+            max_text_tokens_per_sentence=max_text_tokens_per_sentence,
+            timeout_seconds=timeout_seconds,
+            **kwargs
+        )
+
     async def post_generate_request_with_session_auth(
+        self,
         server_ip: str,
         port: str,
         text: str,
         CORRECT_API_KEY: str,
-        output_path: str = output_path,  # 添加输出路径参数
+        output_path: str,
         timeout_seconds: Optional[float] = 60.0,
         max_retries: int = 20,
         initial_retry_delay: float = 1.0,
@@ -161,77 +276,19 @@ class TTSManager:
         backoff_factor: float = 2.0
     ) -> str:
         """发送带认证的POST请求到指定服务器，具有自动重试机制，返回保存的音频文件路径"""
-        url = f"http://{server_ip}:{port}/audio/speech"
-        payload = {
-            "model": "",
-            "input": text,
-            "voice": ""
-        }
-
-        headers = {
-            'Authorization': f'Bearer {CORRECT_API_KEY}',
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-        }
-        
-        retry_count = 0
-        last_error = None
-        
-        while retry_count <= max_retries:
-            timeout = aiohttp.ClientTimeout(total=timeout_seconds)
-            
-            try:
-                async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
-                    async with session.post(url, json=payload) as response:
-                        response.raise_for_status()
-                        
-                        # 检查响应内容类型
-                        content_type = response.headers.get('Content-Type', '')
-                        
-                        if 'audio/wav' in content_type or 'audio/x-wav' in content_type:
-                            # 处理音频文件响应
-                            output_path_path = Path(output_path)
-                            output_path_path.parent.mkdir(parents=True, exist_ok=True)
-                            
-                            with open(output_path_path, 'wb') as f:
-                                while True:
-                                    chunk = await response.content.read(1024)
-                                    if not chunk:
-                                        break
-                                    f.write(chunk)
-                            
-                            logger.info(f"音频文件成功保存到: {output_path_path}")
-                            return str(output_path_path)
-                        else:
-                            # 如果不是音频文件，尝试解析为JSON
-                            result = await response.json()
-                            logger.info(f"请求成功: {result}")
-                            return result
-                        
-            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
-                last_error = e
-                retry_count += 1
-                if retry_count > max_retries:
-                    break
-                    
-                delay = min(
-                    initial_retry_delay * (backoff_factor ** (retry_count - 1)),
-                    max_retry_delay
-                )
-                
-                logger.warning(
-                    f"请求失败({str(e)}), 正在进行第 {retry_count}/{max_retries} 次重试, "
-                    f"等待 {delay:.1f} 秒后重试..."
-                )
-                
-                await asyncio.sleep(delay)
-                
-            except Exception as e:
-                logger.error(f"发生不可重试的错误: {str(e)}")
-                raise
-        
-        logger.error(f"所有重试均失败, 最后错误: {str(last_error)}")
-        raise ConnectionError(f"无法连接到服务器, 重试 {max_retries} 次后失败") from last_error
+        return await self.async_retry_request(
+            request_func=self._post_generate_request,
+            max_retries=max_retries,
+            initial_retry_delay=initial_retry_delay,
+            max_retry_delay=max_retry_delay,
+            backoff_factor=backoff_factor,
+            server_ip=server_ip,
+            port=port,
+            text=text,
+            CORRECT_API_KEY=CORRECT_API_KEY,
+            output_path=output_path,
+            timeout_seconds=timeout_seconds
+        )
 
     @staticmethod
     def cleanup():
@@ -355,6 +412,7 @@ class AstrbotPluginIndexTTS(Star):
 
     async def terminate(self): 
         logger.info("已调用方法:Terminate,正在关闭")
+        manager.on_init = False
         manager.terminate_child_process(self.child_process)
 
     @filter.command_group("tts_cfg_it")
