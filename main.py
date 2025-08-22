@@ -1,13 +1,13 @@
 # 有关tts的详细配置请移步service.py
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
-from astrbot.api.provider import ProviderRequest
-from astrbot.api.message_components import *
+from astrbot.api.event import filter, AstrMessageEvent              # pyright: ignore[reportMissingImports]
+from astrbot.api.star import Context, Star, register                # pyright: ignore[reportMissingImports]
+from astrbot.api.provider import ProviderRequest                    # pyright: ignore[reportMissingImports]
+from astrbot.api.message_components import *                        # pyright: ignore[reportMissingImports]
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path   # pyright: ignore[reportMissingImports]
 from multiprocessing import Process
-from astrbot.api import logger
+from astrbot.api import logger                                      # pyright: ignore[reportMissingImports] 
 from typing import Optional
 from pathlib import Path
-import subprocess
 import aiohttp
 import asyncio
 import atexit
@@ -22,7 +22,8 @@ port = "5210"  # 默认端口号
 
 # 锁文件路径
 lock_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "child_process.lock")
-output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),"temp","output.wav")
+temp_dir = os.path.join(get_astrbot_data_path(), "temp")
+output_path = os.path.join(temp_dir,"output.wav")
 
 class RandomTTS:
     """随机将文字转为语音"""
@@ -34,10 +35,10 @@ class RandomTTS:
         randfloat = random()
         if randfloat <= random_factor:
             logger.info(f"Random TTS triggered,factor: {randfloat} in {random_factor}")
-            if all(isinstance(e, Plain) for e in chain):                            #如果chain里都为Plain元素
-                text_parts = [msg.text for msg in chain if isinstance(msg, Plain)]     #将Plain中的text提取出来，组成列表
-                text_whole = ''.join(text_parts)                                    # 合并所有 Plain 消息的文本
-                chain.clear()                                                       #清除chain里的所有元素
+            if all(isinstance(e, Plain) for e in chain):                                # type: ignore  #如果chain里都为Plain元素
+                text_parts = [msg.text for msg in chain if isinstance(msg, Plain)]      # type: ignore  #将Plain中的text提取出来，组成列表
+                text_whole = ''.join(text_parts)                                                        # 合并所有 Plain 消息的文本
+                chain.clear()                                                                           #清除chain里的所有元素
                 if text_whole != "":
                     try:
                         wav_path = await manager.post_generate_request_with_session_auth(
@@ -49,12 +50,12 @@ class RandomTTS:
                             timeout_seconds=120.0                                   #不够用再改 
                             )
                         chain = [
-                            Record.fromFileSystem(wav_path)
+                            Record.fromFileSystem(wav_path) # type: ignore
                         ]
                     except Exception as e:                                          #返回纯文字以防止影响体验
                         logger.error("Error when trying randomly send vocal message turn to plain text instead")
                         chain = [
-                            Plain(text_whole)
+                            Plain(text_whole) # type: ignore
                         ]
                     return chain
                 else:
@@ -75,8 +76,6 @@ class TTSManager:
     async def post_config_with_session_auth(
         server_ip: str,
         port: str,
-        if_remove_think_tag: bool,
-        if_preload: bool,
         prompt_wav: str,
         CORRECT_API_KEY: str,
         model_ver: str,
@@ -85,18 +84,25 @@ class TTSManager:
         max_retries: int = 20,
         initial_retry_delay: float = 1.0,
         max_retry_delay: float = 60.0,
-        backoff_factor: float = 2.0
+        backoff_factor: float = 2.0,
+        **kwargs
     ) -> dict:
         """发送带认证的POST请求到指定服务器，具有自动重试机制"""
         url = f"http://{server_ip}:{port}/config"
         payload = {
-            "if_remove_think_tag": if_remove_think_tag,
-            "if_preload": if_preload,
             "prompt_wav": prompt_wav,
             "model_ver": model_ver,
             "max_text_tokens_per_sentence": max_text_tokens_per_sentence,
             "CORRECT_API_KEY": CORRECT_API_KEY
         }
+        
+        payload["if_remove_think_tag"] = kwargs["if_remove_think_tag"] if "if_remove_think_tag" in kwargs else False
+        
+        payload["if_preload"] = kwargs["if_preload"] if "if_preload" in kwargs else False
+
+        payload["if_remove_emoji"] = kwargs["if_remove_emoji"] if "if_remove_emoji" in kwargs else False
+
+        payload["if_split_text"] = kwargs["if_split_text"] if "if_split_text" in kwargs else False
 
         headers = {
             'Authorization': f'Bearer {CORRECT_API_KEY}',
@@ -230,95 +236,6 @@ class TTSManager:
         raise ConnectionError(f"无法连接到服务器, 重试 {max_retries} 次后失败") from last_error
 
     @staticmethod
-    async def download_repo() -> None:
-        """异步安全地下载 Index TTS 仓库"""
-        repo_dir = Path(__file__).parent / "index-tts"
-        repo_url = "https://github.com/index-tts/index-tts.git"
-        
-        try:
-            if repo_dir.exists():
-                logger.info("Index TTS Github Repo found, skipping download.")
-                return
-                
-            repo_dir.mkdir(parents=True, exist_ok=True)
-            
-            if not await TTSManager.is_git_available():
-                raise RuntimeError("Git is not installed or not in PATH")
-            
-            logger.info("Downloading Index TTS Github Repo...")
-            
-            await TTSManager.run_command(
-                f"git clone --recursive {repo_url} {repo_dir}",
-                timeout=600
-            )
-            
-            logger.info("Successfully downloaded Index TTS Github Repo")
-            
-        except asyncio.TimeoutError:
-            logger.error("Git clone operation timed out")
-            raise
-        except Exception as e:
-            logger.error(f"Failed to download repository: {str(e)}")
-            if repo_dir.exists():
-                try:
-                    await TTSManager.run_command(f"rm -rf {repo_dir}")
-                except:
-                    pass
-            raise
-
-    @staticmethod
-    async def is_git_available() -> bool:
-        """检查系统是否安装了git"""
-        try:
-            await TTSManager.run_command("git --version", timeout=5)
-            return True
-        except:
-            return False
-
-    @staticmethod
-    async def run_command(command: str, timeout: Optional[float] = None) -> str:
-        """异步执行命令并返回输出"""
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=True,
-            start_new_session=True
-        )
-        
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout
-            )
-            
-            if process.returncode != 0 and process.returncode is not None:
-                error_msg = stderr.decode().strip()
-                logger.error(f"Command failed with error: {error_msg}")
-                raise subprocess.CalledProcessError(
-                    process.returncode, 
-                    command, 
-                    stdout, 
-                    stderr
-                )
-                
-            return stdout.decode().strip()
-            
-        except asyncio.TimeoutError:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-            raise
-        except Exception as e:
-            if process.returncode is None:
-                process.kill()
-                await process.wait()
-            raise
-
-    @staticmethod
     def cleanup():
         """清理锁文件"""
         if os.path.exists(lock_file_path):
@@ -361,17 +278,18 @@ class TTSManager:
     
 manager = TTSManager()
 
-@register("astrbot_plugin_index_tts", "xiewoc ", "基于index-tts对AstrBot的语音转文字(TTS)补充", "1.0.1", "https://github.com/xiewoc/astrbot_plugin_spark_tts")
+@register("astrbot_plugin_index_tts", "xiewoc ", "基于index-tts对AstrBot的语音转文字(TTS)补充", "1.0.3", "https://github.com/xiewoc/astrbot_plugin_spark_tts")
 class AstrbotPluginIndexTTS(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
         self.reduce_parenthesis = config.get('if_reduce_parenthesis', False)
         self.if_remove_think_tag = config.get("if_remove_think_tag", False)
-        self.if_preload = False
+        self.if_split_text = config.get("if_split_text", False)
+        self.if_remove_emoji = config.get("if_remove_emoji", False)
         self.child_process = None
 
-        sub_config_misc = config.get('misc', {})
+        sub_config_generation = config.get('generation', {})
         sub_config_serve = config.get('serve_config', {})
         
         # 确保sounds目录存在
@@ -380,12 +298,13 @@ class AstrbotPluginIndexTTS(Star):
         
         self.prompt_wav = os.path.join(
             sounds_dir,
-            sub_config_misc.get("prompt_wav", "")
+            sub_config_generation.get("prompt_wav", "")
         )
-        self.model_ver = sub_config_misc.get("model_ver", "1.5") 
-        self.max_text_tokens_per_sentence = sub_config_misc.get("max_text_tokens_per_sentence",100)
-        self.if_random_tts = sub_config_misc.get("if_random_tts",False)
-        self.random_factor = sub_config_misc.get("random_factor",0.3)
+        self.model_ver = sub_config_generation.get("model_ver", "1.5") 
+        self.max_text_tokens_per_sentence = sub_config_generation.get("max_text_tokens_per_sentence",100)
+        self.if_preload = sub_config_generation.get("if_preload",False)
+        self.if_random_tts = sub_config_generation.get("if_random_tts",False)
+        self.random_factor = sub_config_generation.get("random_factor",0.3)
 
         self.server_ip = sub_config_serve.get("server_ip", "127.0.0.1")  
         self.if_seperate_serve = sub_config_serve.get("if_seperate_serve", False)
@@ -395,35 +314,36 @@ class AstrbotPluginIndexTTS(Star):
         outputs_dir = Path(__file__).parent / "outputs"
         os.makedirs(outputs_dir, exist_ok=True)
         
-    @filter.on_astrbot_loaded()
-    async def on_astrbot_loaded(self):
+    async def initialize(self):
         try:
-            await manager.download_repo()
-                
+            logger.info("插件初始化中...")
             if not self.if_seperate_serve:
                 self.child_process = manager.start_child_process()
                 manager.on_init = False
                 if self.child_process:
                     logger.info("TTS服务子进程已启动")
 
-            #await asyncio.sleep(2)  # 等待服务启动
-
-            # 检查服务是否可用
             try:
+                params = {
+                    "if_remove_think_tag": self.if_remove_think_tag,
+                    "if_preload": self.if_preload,
+                    "if_split_text": self.if_split_text,
+                    "if_remove_emoji": self.if_remove_emoji
+                }
+
                 await manager.post_config_with_session_auth(
                     self.server_ip,
                     port,
-                    self.if_remove_think_tag,
-                    self.if_preload,
                     self.prompt_wav,
                     self.CORRECT_API_KEY,
                     self.model_ver,
                     self.max_text_tokens_per_sentence,
                     timeout_seconds = 30.0,  # 首次连接使用较短超时
                     max_retries = 10,
-                    initial_retry_delay = 1.0,
-                    max_retry_delay = 20.0,
-                    backoff_factor = 2.0
+                    initial_retry_delay = 5.0,
+                    max_retry_delay = 80.0,
+                    backoff_factor = 2.0,
+                    **params
                 )
             except Exception as e:
                 logger.error(f"初始服务连接失败: {str(e)}")
@@ -454,8 +374,6 @@ class AstrbotPluginIndexTTS(Star):
             await manager.post_config_with_session_auth(
                 self.server_ip,
                 port,
-                self.if_remove_think_tag,
-                self.if_preload,
                 self.prompt_wav,
                 self.CORRECT_API_KEY,
                 self.model_ver,
@@ -466,6 +384,7 @@ class AstrbotPluginIndexTTS(Star):
                 max_retry_delay = 20.0,
                 backoff_factor = 2.0
             )
+            await event.reply(f"语音源已更改为: {voice_name}")
         except Exception as e:
             logger.error(f"初始服务连接失败: {str(e)}")
             if not self.if_seperate_serve and self.child_process:
@@ -509,12 +428,12 @@ class AstrbotPluginIndexTTS(Star):
                     timeout_seconds=90.0
                     )
                 chain = [
-                    Record.fromFileSystem(wav_path)
+                    Record.fromFileSystem(wav_path) # type: ignore
                 ]
             except Exception as e:
                 logger.error(f"语音消息生成失败: {e}")
                 chain = [
-                    Plain(text)
+                    Plain(text) # type: ignore
                 ]
         else:
             pass    

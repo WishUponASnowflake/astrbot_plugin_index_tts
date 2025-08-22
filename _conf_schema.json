@@ -10,7 +10,15 @@
         "type": "bool",
         "hint": "有些人格设置会影响该设置生效，请酌情使用"
     },
-    "misc":{
+    "if_remove_emoji": {
+        "description": "是否去除句子里的表情(emoji)",
+        "type": "bool"
+    },
+    "if_split_text": {
+        "description": "是否分割句子",
+        "type": "bool"
+    },
+    "generation":{
         "description": "配置",
         "type": "object",
         "items": {
@@ -26,6 +34,11 @@
                 "options": ["1","1.5"],
                 "hint": "模型版本，默认为IndexTTS-1.5版本",
                 "default": "1.5"
+            },
+            "if_preload":{
+                "description": "是否预加载模型",
+                "type": "bool",
+                "default": false
             },
             "max_text_tokens_per_sentence":{
                 "description": "每个句子最多的Token数",
