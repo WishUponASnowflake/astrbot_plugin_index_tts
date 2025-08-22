@@ -192,8 +192,6 @@ class TTSService:
         
         # 初始化路径
         self.dir_path = os.path.join(os.path.dirname(os.path.abspath(__file__)))
-        self.output_path = os.path.join(self.dir_path, "outputs", "output.wav") # 默认输出路径，仅初始化使用
-        self.output_wav_list = []
         self.output_path_final = os.path.join(self.dir_path, "outputs", "output.wav")
         
         # 添加必要的路径到sys.path
@@ -357,37 +355,41 @@ async def generate_speech(
         else:
             text_list = [input_text]
 
+        output_wav_list = []  # 用于存储每段生成的音频文件路径
+
         for idx, text in enumerate(text_list):          # 遍历分割后的文本列表,分次合成
 
-            service.output_path = os.path.join(service.dir_path, "outputs", f"opt_{idx+1}.wav") # 每次重新赋值 -> 避免覆盖
+            output_path = os.path.join(service.dir_path, "outputs", f"opt_{idx+1}.wav") # 每次重新赋值 -> 避免覆盖
 
             logging.info(f"Generating speech for segment {idx+1}/{len(text_list)}...")
             if service.model is not None:
                 # 使用线程池执行模型推理
                 await loop.run_in_executor(
                     service.thread_pool, 
-                    lambda: service.model.infer(service.prompt_wav, text, service.output_path, service.max_text_tokens_per_sentence) # type: ignore
+                    lambda: service.model.infer(service.prompt_wav, text, output_path, service.max_text_tokens_per_sentence) # type: ignore
                 )
-                logging.info(f"Speech generating at {service.output_path}")
+                logging.info(f"Speech generating at {output_path}")
             else:
                 raise HTTPException(status_code=500, detail="Model not loaded")
 
-            if not os.path.exists(service.output_path):
+            if not os.path.exists(output_path):
                 raise HTTPException(status_code=500, detail=f"Failed to generate speech segment {idx+1}/{len(text_list)}")
             else:
-                service.output_wav_list.append(service.output_path)
+                output_wav_list.append(output_path)
 
-        if len(service.output_wav_list) == 1:
-            service.output_path = service.output_wav_list[0]
+        if len(output_wav_list) == 1:
+            output_path = output_wav_list[0]
 
-        elif len(service.output_wav_list) > 1:
-            service.output_path = misc.merge_audio_files(service.output_wav_list, service.output_path_final)
+        elif len(output_wav_list) > 1:
+            output_path = misc.merge_audio_files(output_wav_list, service.output_path_final)
 
         else:
             raise HTTPException(status_code=500, detail="Speech failed to be generated.Output wav list is void")
+        
+        output_wav_list = [] # 清空列表，准备下次使用？
 
         return FileResponse(
-            path=service.output_path, 
+            path=output_path, 
             media_type='audio/wav', 
             filename="output.wav"
         )
