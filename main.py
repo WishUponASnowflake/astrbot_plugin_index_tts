@@ -15,7 +15,7 @@ import sys
 import os
 from random import random
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+#sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 #端口在这里改
 port = "5210"  # 默认端口号
@@ -31,7 +31,7 @@ class RandomTTS:
         pass
     
     @staticmethod
-    async def RandomReplace(chain: list, random_factor: float, server_ip: str, CORRECT_API_KEY: str):
+    async def random_replace(chain: list, random_factor: float, server_ip: str, CORRECT_API_KEY: str):
         randfloat = random()
         if randfloat <= random_factor:
             logger.info(f"Random TTS triggered,factor: {randfloat} in {random_factor}")
@@ -244,8 +244,8 @@ class TTSManager:
     @staticmethod
     def child_process_function():
         """子进程执行的函数"""
-        import service 
-        service.run_service()
+        from .service import run_service
+        run_service()  # 启动服务
 
     @staticmethod
     def terminate_child_process(child_process):
@@ -339,8 +339,8 @@ class AstrbotPluginIndexTTS(Star):
                     self.model_ver,
                     self.max_text_tokens_per_sentence,
                     timeout_seconds = 30.0,  # 首次连接使用较短超时
-                    max_retries = 10,
-                    initial_retry_delay = 5.0,
+                    max_retries = 20,
+                    initial_retry_delay = 3.0,
                     max_retry_delay = 80.0,
                     backoff_factor = 2.0,
                     **params
@@ -395,7 +395,7 @@ class AstrbotPluginIndexTTS(Star):
     async def on_decorating_result(self, event: AstrMessageEvent):
         chain = event.get_result().chain
         if self.if_random_tts:
-            chain = await randomtts.RandomReplace(
+            chain = await randomtts.random_replace(
                 chain,
                 self.random_factor,
                 self.server_ip,

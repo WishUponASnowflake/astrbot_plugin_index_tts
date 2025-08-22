@@ -334,8 +334,6 @@ async def generate_speech(
         
         input_text = misc.remove_emoji(input_text) if service.if_remove_emoji else input_text
 
-        # 使用线程池处理模型加载和推理
-        loop = asyncio.get_event_loop()
         
         # 如果模型未加载，使用线程池加载
         if not service.if_preload and not service.if_loaded:
@@ -356,6 +354,9 @@ async def generate_speech(
             text_list = [input_text]
 
         output_wav_list = []  # 用于存储每段生成的音频文件路径
+
+        # 使用线程池处理模型推理
+        loop = asyncio.get_event_loop()
 
         for idx, text in enumerate(text_list):          # 遍历分割后的文本列表,分次合成
 
@@ -381,7 +382,10 @@ async def generate_speech(
             output_path = output_wav_list[0]
 
         elif len(output_wav_list) > 1:
-            output_path = misc.merge_audio_files(output_wav_list, service.output_path_final)
+            output_path = await loop.run_in_executor(
+                    service.thread_pool, 
+                    lambda: misc.merge_audio_files(output_wav_list, service.output_path_final)
+                )
 
         else:
             raise HTTPException(status_code=500, detail="Speech failed to be generated.Output wav list is void")
@@ -442,3 +446,4 @@ async def update_config(config: Config):
 
 if __name__ == "__main__":
     logging.warning("This is a model service, you can't run this separately.")
+    logging.warning("But you can run this model using `service.run_service()` to start the service after import in cli.")
