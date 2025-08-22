@@ -15,8 +15,6 @@ import sys
 import os
 from random import random
 
-#sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 #端口在这里改
 port = "5210"  # 默认端口号
 
@@ -387,8 +385,6 @@ class AstrbotPluginIndexTTS(Star):
             await event.reply(f"语音源已更改为: {voice_name}")
         except Exception as e:
             logger.error(f"初始服务连接失败: {str(e)}")
-            if not self.if_seperate_serve and self.child_process:
-                self.child_process.terminate()
             raise
 
     @filter.on_decorating_result()
