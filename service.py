@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Request, status, Depends
 from fastapi.responses import FileResponse
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Union, List
 from pathlib import Path
 import subprocess
 import uvicorn
@@ -61,7 +61,7 @@ class Misc:
             logging.info("Downloading Index TTS Github Repo...")
             
             await Misc._run_command(
-                f"git clone --recursive {repo_url} {repo_dir}",
+                ["git", "clone", "--recursive", repo_url, str(repo_dir)],
                 timeout=600
             )
             
@@ -83,21 +83,46 @@ class Misc:
     async def _is_git_available() -> bool:
         """检查系统是否安装了git"""
         try:
-            await Misc._run_command("git --version", timeout=5)
+            await Misc._run_command(["git", "--version"], timeout=5)
             return True
         except:
             return False
 
     @staticmethod
-    async def _run_command(command: str, timeout: Optional[float] = None) -> str:
+    async def _run_command(command: Union[str, List[str]], timeout: Optional[float] = None) -> str:
         """异步执行命令并返回输出"""
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=True,
-            start_new_session=True
-        )
+        import shlex
+        
+        # 确定使用哪种方式执行
+        if isinstance(command, str):
+            # 字符串命令，使用 shell=False 的安全方式
+            args = shlex.split(command)
+            use_shell = False
+            command_for_error = command
+        else:
+            # 已经是参数列表
+            args = command
+            use_shell = False
+            command_for_error = ' '.join(shlex.quote(arg) for arg in command)
+        
+        if use_shell:
+            # 只有在绝对必要时才使用 shell=True
+            if isinstance(command, str):
+                process = await asyncio.create_subprocess_shell(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    start_new_session=True
+                )
+            else:
+                raise ValueError("Command must be a string when using shell=True")
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True
+            )
         
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -110,7 +135,7 @@ class Misc:
                 logging.error(f"Command failed with error: {error_msg}")
                 raise subprocess.CalledProcessError(
                     process.returncode, 
-                    command, 
+                    command_for_error,  # 用于错误信息的命令字符串
                     stdout, 
                     stderr
                 )
@@ -183,12 +208,27 @@ class TTSService:
         self.if_split_text = False
         self.if_remove_emoji = False
         self.if_loaded = False
+        self.use_fp16 = False
+        self.use_cuda_kernel = False
+        self.use_deepspeed = False
+
         self.model = None
         self.CORRECT_API_KEY:str = ""
+
         self.model_ver = "1.5"
         self.prompt_wav = ""
+        self.emo_alpha = 1.0
+        self.emo_audio_prompt = ""
+        self.emo_vector = [0,0,0,0,0,0,0,0]
+        self.use_emo_text = False
+        self.emo_text = ""
+        self.use_random = False
+        self.interval_silence = 120
+        self.verbose = False
         self.max_text_tokens_per_sentence = 100
+
         self.thread_pool: ThreadPoolExecutor
+        self.loop = asyncio.get_event_loop()
         
         # 初始化路径
         self.dir_path = os.path.join(os.path.dirname(os.path.abspath(__file__)))
@@ -197,37 +237,45 @@ class TTSService:
         # 添加必要的路径到sys.path
         sys.path.insert(0, os.path.join(self.dir_path, "index-tts"))
 
-    async def DownloadModel(self, model_ver=None):
+    async def DownloadModel(self, model_ver="1.5"):
         """下载并加载TTS模型"""
         model_ver = model_ver or self.model_ver
-        if model_ver not in ["1", "1.5"]:
-            raise ValueError("Unsupported model version. Supported versions are '1' and '1.5'.")
+        if model_ver not in ["1", "1.5", "2"]:
+            raise ValueError("Unsupported model version. Supported versions are '1' , '1.5' and '2'.")
 
         from modelscope import snapshot_download
 
-        actual_model_path = os.path.join(self.dir_path, f"IndexTTS{'-1.5' if model_ver == '1.5' else ''}")
+        if model_ver == "1":
+            attr = ""
+        elif model_ver == "1.5":
+            attr = "-1.5"
+        elif model_ver == "2":
+            attr = "-2"
+
+        actual_model_path = os.path.join(self.dir_path, "pretrained_models", f"IndexTTS{attr if attr else ''}")
 
         if not os.path.exists(actual_model_path):
             logging.info(f"Downloading model version {model_ver} to {actual_model_path}...")
 
             # 使用线程池处理模型下载
-            loop = asyncio.get_event_loop()
 
-            await loop.run_in_executor(
+            await self.loop.run_in_executor(
                 self.thread_pool, 
-                lambda: snapshot_download(f"IndexTeam/Index-TTS{'-1.5' if model_ver == '1.5' else ''}", local_dir=actual_model_path)
+                lambda: snapshot_download(f"IndexTeam/Index-TTS{attr if attr else ''}", local_dir=actual_model_path)
             )
         else:
             logging.warning(f"Model path {actual_model_path} already exists, skipping download.")
 
-    async def load_model(self, model_ver=None):
+    async def load_model(self, model_ver="1.5"):
         """加载TTS模型"""
         model_ver = model_ver or self.model_ver
 
         if model_ver == "1":
-            actual_model_path = os.path.join(self.dir_path, "IndexTTS")
+            actual_model_path = os.path.join(self.dir_path, "pretrained_models", "IndexTTS")
         elif model_ver == "1.5":
-            actual_model_path = os.path.join(self.dir_path, "IndexTTS-1.5")
+            actual_model_path = os.path.join(self.dir_path, "pretrained_models", "IndexTTS-1.5")
+        elif model_ver == "2":
+            actual_model_path = os.path.join(self.dir_path, "pretrained_models", "IndexTTS-2")
 
         cfg_path = os.path.join(actual_model_path, "config.yaml")
         
@@ -240,20 +288,33 @@ class TTSService:
         logging.info(f"Using model path: {actual_model_path}")
         logging.info(f"Using config path: {cfg_path}")
 
-        try:
-            from indextts.infer import IndexTTS # type: ignore
+        if model_ver in ["1","1.5"]:
+            try:
+                from indextts.infer import IndexTTS # type: ignore
 
-            loop = asyncio.get_event_loop()
-
-            self.model =  await loop.run_in_executor(
-                    self.thread_pool, 
-                    lambda: IndexTTS(model_dir=actual_model_path, cfg_path=cfg_path)
-                )
-            logging.info("Model loaded successfully.")
+                self.model =  await self.loop.run_in_executor(
+                        self.thread_pool, 
+                        lambda: IndexTTS(model_dir=actual_model_path, cfg_path=cfg_path)
+                    )
+                logging.info("Model loaded successfully.")
             
-        except Exception as e:
-            logging.error(f"Failed to load model: {e}")
-            raise HTTPException(status_code=500, detail="Model loading failed")
+            except Exception as e:
+                logging.error(f"Failed to load model: {e}")
+                raise HTTPException(status_code=500, detail="Model loading failed")
+            
+        elif model_ver == "2":
+            try:
+                from indextts.infer_v2 import IndexTTS2 # type: ignore
+
+                self.model =  await self.loop.run_in_executor(
+                        self.thread_pool, 
+                        lambda: IndexTTS2(cfg_path=cfg_path, model_dir=actual_model_path, use_fp16=self.use_fp16, use_cuda_kernel=self.use_cuda_kernel, use_deepspeed=self.use_deepspeed)
+                    )
+                logging.info("Model loaded successfully.")
+            
+            except Exception as e:
+                logging.error(f"Failed to load model: {e}")
+                raise HTTPException(status_code=500, detail="Model loading failed")
 
         if self.model is None:
             logging.error("Failed to load model.")
@@ -261,6 +322,48 @@ class TTSService:
         
         self.if_loaded = True
         return self.model
+    
+    async def infer(self, text_list, output_wav_list = [], emo_audio_prompt=None, emo_alpha=1.0, emo_vector=None,use_emo_text=False, emo_text=None, use_random=False, model_ver="1", model=None):
+
+        model_ver = model_ver if model_ver else self.model_ver
+        model = model if model else self.model
+
+        if emo_audio_prompt:
+            emo_vector = None
+            use_emo_text = False
+            emo_text = None
+            use_random = False
+        
+        if use_random:
+            emo_vector = None
+            use_emo_text = False
+            emo_text = None
+
+        for idx, text in enumerate(text_list):          # 遍历分割后的文本列表,分次合成
+
+            output_path = os.path.join(self.dir_path, "outputs", f"opt_{idx+1}.wav") # 每次重新赋值 -> 避免覆盖
+
+            logging.info(f"Generating speech for segment {idx+1}/{len(text_list)}...")
+            if self.model is not None:
+                # 使用线程池执行模型推理
+                if model_ver in ["1", "1.5"]:
+                    await self.loop.run_in_executor(
+                        self.thread_pool, 
+                        lambda: model.infer(self.prompt_wav, text, output_path, self.max_text_tokens_per_sentence) # type: ignore
+                    )
+                elif model_ver =="2":
+                    await self.loop.run_in_executor(
+                        self.thread_pool, 
+                        lambda: model.infer(self.prompt_wav, text, output_path, emo_audio_prompt=emo_audio_prompt, emo_alpha=emo_alpha, emo_vector=emo_vector, use_emo_text=use_emo_text, emo_text=emo_text, use_random=use_random, interval_silence=self.interval_silence, verbose=self.verbose, max_text_tokens_per_segment=self.max_text_tokens_per_sentence) #type: ignore
+                    )
+                logging.info(f"Speech generating at {output_path}")
+            else:
+                raise HTTPException(status_code=500, detail="Model not loaded")
+
+            if not os.path.exists(output_path):
+                raise HTTPException(status_code=500, detail=f"Failed to generate speech segment {idx+1}/{len(text_list)}")
+            else:
+                output_wav_list.append(output_path)
 
 
     async def verify_api_key(self, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
@@ -309,8 +412,20 @@ class Config(BaseModel):
     # 非必须参数
     if_remove_think_tag: bool = Field(False, description="是否移除思考标签")
     if_preload: bool = Field(False, description="是否预加载")
-    if_split_text:bool = Field(False, description="是否分割文本")
-    if_remove_emoji:bool = Field(False, description="是否移除表情(emoji)")
+    if_split_text: bool = Field(False, description="是否分割文本")
+    if_remove_emoji: bool = Field(False, description="是否移除表情(emoji)")
+    use_fp16:bool = Field(False, description="是否使用fp16精度")
+    use_cuda_kernel: bool = Field(False, description="是否使用cuda内核")
+    use_deepspeed: bool = Field(False, description="是否使用deepspeed加速")
+
+    emo_alpha: float = Field(1.0)
+    emo_audio_prompt: str = Field("")
+    emo_vector: list = Field([0,0,0,0,0,0,0,0])
+    use_emo_text: bool = Field(False)
+    emo_text: str = Field("")
+    use_random: bool  = Field(False)
+    interval_silence: int = Field(120)
+    verbose: bool = Field(False)
 
     # 必须参数
     prompt_wav: str = Field(..., description="输入音源")
@@ -355,40 +470,17 @@ async def generate_speech(
 
         output_wav_list = []  # 用于存储每段生成的音频文件路径
 
-        # 使用线程池处理模型推理
-        loop = asyncio.get_event_loop()
-
-        for idx, text in enumerate(text_list):          # 遍历分割后的文本列表,分次合成
-
-            output_path = os.path.join(service.dir_path, "outputs", f"opt_{idx+1}.wav") # 每次重新赋值 -> 避免覆盖
-
-            logging.info(f"Generating speech for segment {idx+1}/{len(text_list)}...")
-            if service.model is not None:
-                # 使用线程池执行模型推理
-                await loop.run_in_executor(
-                    service.thread_pool, 
-                    lambda: service.model.infer(service.prompt_wav, text, output_path, service.max_text_tokens_per_sentence) # type: ignore
-                )
-                logging.info(f"Speech generating at {output_path}")
-            else:
-                raise HTTPException(status_code=500, detail="Model not loaded")
-
-            if not os.path.exists(output_path):
-                raise HTTPException(status_code=500, detail=f"Failed to generate speech segment {idx+1}/{len(text_list)}")
-            else:
-                output_wav_list.append(output_path)
+        await service.infer(text_list,output_wav_list)
 
         if len(output_wav_list) == 1:
             output_path = output_wav_list[0]
 
         elif len(output_wav_list) > 1:
+            loop = asyncio.get_event_loop()
             output_path = await loop.run_in_executor(
                     service.thread_pool, 
                     lambda: misc.merge_audio_files(output_wav_list, service.output_path_final)
                 )
-
-        else:
-            raise HTTPException(status_code=500, detail="Speech failed to be generated.Output wav list is void")
         
         output_wav_list = [] # 清空列表，准备下次使用？
 
@@ -404,11 +496,11 @@ async def generate_speech(
 @app.post("/config")
 async def update_config(config: Config):
 
-    if config.if_remove_think_tag is not None:
+    if config.if_remove_think_tag:
         service.if_remove_think_tag = config.if_remove_think_tag
         logging.info(f"已设置去除思考标签功能: {service.if_remove_think_tag}")
 
-    if config.if_preload is not None:
+    if config.if_preload:
         service.if_preload = config.if_preload
         logging.info(f"已设置预加载: {service.if_preload}")
 
@@ -417,14 +509,59 @@ async def update_config(config: Config):
             service.if_loaded = True
             logging.info("模型已预加载")
     
-    if config.if_remove_emoji:
-        service.if_remove_emoji = config.if_remove_emoji
-        logging.info(f"已设置是否去除emoji: {service.if_remove_emoji}")
-
     if config.if_split_text:
         service.if_split_text = config.if_split_text
         logging.info(f"已设置是否分割文本: {service.if_split_text}")
     
+    if config.if_remove_emoji:
+        service.if_remove_emoji = config.if_remove_emoji
+        logging.info(f"已设置是否移除表情(emoji): {service.if_remove_emoji}")
+
+    if config.use_fp16:
+        service.use_fp16 = config.use_fp16
+        logging.info(f"已设置是否使用fp16精度: {service.use_fp16}")
+
+    if config.use_cuda_kernel:
+        service.use_cuda_kernel = config.use_cuda_kernel
+        logging.info(f"已设置是否使用cuda内核: {service.use_cuda_kernel}")
+
+    if config.use_deepspeed:
+        service.use_deepspeed = config.use_deepspeed
+        logging.info(f"已设置是否使用deepspeed加速: {service.use_deepspeed}")
+
+    if config.emo_alpha is not None:
+        service.emo_alpha = config.emo_alpha
+        logging.info(f"已设置情感alpha参数: {service.emo_alpha}")
+
+    if config.emo_audio_prompt is not None:
+        service.emo_audio_prompt = config.emo_audio_prompt
+        logging.info(f"已设置情感音频提示: {service.emo_audio_prompt}")
+
+    if config.emo_vector is not None:
+        service.emo_vector = config.emo_vector
+        logging.info(f"已设置情感向量: {service.emo_vector}")
+
+    if config.use_emo_text:
+        service.use_emo_text = config.use_emo_text
+        logging.info(f"已设置是否使用情感文本: {service.use_emo_text}")
+
+    if config.emo_text is not None:
+        service.emo_text = config.emo_text
+        logging.info(f"已设置情感文本: {service.emo_text}")
+
+    if config.use_random:
+        service.use_random = config.use_random
+        logging.info(f"已设置是否使用随机: {service.use_random}")
+
+    if config.interval_silence is not None:
+        service.interval_silence = config.interval_silence
+        logging.info(f"已设置静音间隔: {service.interval_silence}")
+
+    if config.verbose:
+        service.verbose = config.verbose
+        logging.info(f"已设置详细输出: {service.verbose}")
+
+    # 必须参数
     if config.prompt_wav:
         service.prompt_wav = config.prompt_wav
         logging.info(f"已设置音频输入文件: {service.prompt_wav}")

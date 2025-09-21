@@ -2,7 +2,7 @@
     "if_remove_think_tag": {
         "description": "是否去除<think></think>",
         "type": "bool",
-        "hint": "因为思考模型会以<think>.....</think>的形式输出思考过程，会影响语音合成，如果不是使用思考模型可忽略",
+        "hint": "因为思考模型会以<think>...</think>的形式输出思考过程，会影响语音合成，如果不是使用思考模型可忽略",
         "obvious_hint": true
     },
     "if_reduce_parenthesis": {
@@ -18,6 +18,36 @@
         "description": "是否分割句子",
         "type": "bool"
     },
+    "use_fp16": {
+        "description": "是否使用fp16精度",
+        "type": "bool",
+        "default": false
+    },
+    "use_cuda_kernel": {
+        "description": "是否使用cuda内核",
+        "type": "bool",
+        "default": false
+    },
+    "use_deepspeed": {
+        "description": "是否使用deepspeed加速",
+        "type": "bool",
+        "default": false
+    },
+    "use_emo_text": {
+        "description": "是否使用情感文本",
+        "type": "bool",
+        "default": false
+    },
+    "use_random": {
+        "description": "是否使用随机",
+        "type": "bool",
+        "default": false
+    },
+    "verbose": {
+        "description": "是否输出详细日志",
+        "type": "bool",
+        "default": false
+    },
     "generation":{
         "description": "配置",
         "type": "object",
@@ -28,10 +58,35 @@
                 "hint": "源语音",
                 "default": "prompt_白芷.wav"
             },
+            "emo_alpha": {
+                "description": "情感alpha参数",
+                "type": "float",
+                "default": 1.0
+            },
+            "interval_silence": {
+                "description": "静音间隔",
+                "type": "int",
+                "default": 120
+            },
+            "emo_audio_prompt": {
+                "description": "情感音频提示",
+                "type": "string",
+                "default": ""
+            },
+            "emo_text": {
+                "description": "情感文本",
+                "type": "string",
+                "default": ""
+            },
+            "emo_vector": {
+                "description": "情感向量",
+                "type": "list",
+                "default": [0, 0, 0, 0, 0, 0, 0, 0]
+            },
             "model_ver":{
                 "description": "模型版本",
                 "type": "string",
-                "options": ["1","1.5"],
+                "options": ["1","1.5","2"],
                 "hint": "模型版本，默认为IndexTTS-1.5版本",
                 "default": "1.5"
             },

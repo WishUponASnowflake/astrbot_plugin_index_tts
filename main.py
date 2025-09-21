@@ -22,6 +22,23 @@ lock_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "child
 temp_dir = os.path.join(get_astrbot_data_path(), "temp")
 output_path = os.path.join(temp_dir,"output.wav")
 
+class Misc:
+    def _get_prompt_wav_path(self, generation_config):
+        """获取提示音频文件路径"""
+        prompt_wav_filename = generation_config.get("prompt_wav", "prompt_白芷.wav")
+        sounds_dir = Path(__file__).parent / "sounds"
+        return os.path.join(sounds_dir, prompt_wav_filename)
+    
+    def _ensure_directories(self):
+        """确保必要的目录存在"""
+        # 确保sounds目录存在
+        sounds_dir = Path(__file__).parent / "sounds"
+        os.makedirs(sounds_dir, exist_ok=True)
+        
+        # 确保outputs目录存在
+        outputs_dir = Path(__file__).parent / "outputs"
+        os.makedirs(outputs_dir, exist_ok=True)
+
 class RandomTTS:
     """随机将文字转为语音"""
     def __init__(self) -> None:
@@ -69,7 +86,6 @@ class TTSManager:
     def __init__(self):
         self.on_init = True  # 标记是否为初始化阶段
     
-
     async def async_retry_request(
             self,
             request_func: Callable,
@@ -135,18 +151,20 @@ class TTSManager:
 
     # 具体的请求函数
     async def _post_config_request(
-            self,
-            server_ip: str,
-            port: str,
-            prompt_wav: str,
-            CORRECT_API_KEY: str,
-            model_ver: str,
-            max_text_tokens_per_sentence: int,
-            timeout_seconds: Optional[float] = 60.0,
-            **kwargs
-        ) -> dict:
+        self,
+        server_ip: str,
+        port: str,
+        prompt_wav: str,
+        CORRECT_API_KEY: str,
+        model_ver: str,
+        max_text_tokens_per_sentence: int,
+        timeout_seconds: Optional[float] = 60.0,
+        **kwargs
+    ) -> dict:
         """具体的POST配置请求实现"""
         url = f"http://{server_ip}:{port}/config"
+        
+        # 构建基础payload
         payload = {
             "prompt_wav": prompt_wav,
             "model_ver": model_ver,
@@ -154,15 +172,16 @@ class TTSManager:
             "CORRECT_API_KEY": CORRECT_API_KEY
         }
         
-        # 处理可选参数
+        # 添加所有可选参数（如果存在于kwargs中）
+        config_fields = [
+            "if_remove_think_tag", "if_preload", "if_split_text", "if_remove_emoji",
+            "use_fp16", "use_cuda_kernel", "use_deepspeed", "use_emo_text", "use_random", "verbose",
+            "emo_alpha", "emo_audio_prompt", "emo_vector", "emo_text", "interval_silence"
+        ]
         
-        payload["if_remove_think_tag"] = kwargs["if_remove_think_tag"] if "if_remove_think_tag" in kwargs else False
-        
-        payload["if_preload"] = kwargs["if_preload"] if "if_preload" in kwargs else False
-
-        payload["if_remove_emoji"] = kwargs["if_remove_emoji"] if "if_remove_emoji" in kwargs else False
-
-        payload["if_split_text"] = kwargs["if_split_text"] if "if_split_text" in kwargs else False
+        for field in config_fields:
+            if field in kwargs:
+                payload[field] = kwargs[field]
         
         headers = {
             'Authorization': f'Bearer {CORRECT_API_KEY}',
@@ -332,42 +351,48 @@ class TTSManager:
         return p
     
 manager = TTSManager()
+misc = Misc()
 
-@register("astrbot_plugin_index_tts", "xiewoc ", "基于index-tts对AstrBot的语音转文字(TTS)补充", "1.0.3", "https://github.com/xiewoc/astrbot_plugin_spark_tts")
+@register("astrbot_plugin_index_tts", "xiewoc ", "基于index-tts对AstrBot的语音转文字(TTS)补充", "1.0.4", "https://github.com/xiewoc/astrbot_plugin_spark_tts")
 class AstrbotPluginIndexTTS(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
+        # 基础配置项
         self.reduce_parenthesis = config.get('if_reduce_parenthesis', False)
         self.if_remove_think_tag = config.get("if_remove_think_tag", False)
         self.if_split_text = config.get("if_split_text", False)
         self.if_remove_emoji = config.get("if_remove_emoji", False)
+        self.use_fp16 = config.get("use_fp16", False)
+        self.use_cuda_kernel = config.get("use_cuda_kernel", False)
+        self.use_deepspeed = config.get("use_deepspeed", False)
+        self.use_emo_text = config.get("use_emo_text", False)
+        self.use_random = config.get("use_random", False)
+        self.verbose = config.get("verbose", False)
         self.child_process = None
 
+        # 生成配置子项
         sub_config_generation = config.get('generation', {})
-        sub_config_serve = config.get('serve_config', {})
-        
-        # 确保sounds目录存在
-        sounds_dir = Path(__file__).parent / "sounds"
-        os.makedirs(sounds_dir, exist_ok=True)
-        
-        self.prompt_wav = os.path.join(
-            sounds_dir,
-            sub_config_generation.get("prompt_wav", "")
-        )
-        self.model_ver = sub_config_generation.get("model_ver", "1.5") 
-        self.max_text_tokens_per_sentence = sub_config_generation.get("max_text_tokens_per_sentence",100)
-        self.if_preload = sub_config_generation.get("if_preload",False)
-        self.if_random_tts = sub_config_generation.get("if_random_tts",False)
-        self.random_factor = sub_config_generation.get("random_factor",0.3)
+        self.prompt_wav = misc._get_prompt_wav_path(sub_config_generation)
+        self.emo_alpha = sub_config_generation.get("emo_alpha", 1.0)
+        self.interval_silence = sub_config_generation.get("interval_silence", 120)
+        self.emo_audio_prompt = sub_config_generation.get("emo_audio_prompt", "")
+        self.emo_text = sub_config_generation.get("emo_text", "")
+        self.emo_vector = sub_config_generation.get("emo_vector", [0, 0, 0, 0, 0, 0, 0, 0])
+        self.model_ver = sub_config_generation.get("model_ver", "1.5")
+        self.if_preload = sub_config_generation.get("if_preload", False)
+        self.max_text_tokens_per_sentence = sub_config_generation.get("max_text_tokens_per_sentence", 100)
+        self.if_random_tts = sub_config_generation.get("if_random_tts", False)
+        self.random_factor = sub_config_generation.get("random_factor", 0.3)
 
-        self.server_ip = sub_config_serve.get("server_ip", "127.0.0.1")  
+        # 服务器配置子项
+        sub_config_serve = config.get('serve_config', {})
+        self.server_ip = sub_config_serve.get("server_ip", "127.0.0.1")
         self.if_seperate_serve = sub_config_serve.get("if_seperate_serve", False)
         self.CORRECT_API_KEY = sub_config_serve.get("CORRECT_API_KEY", "")
         
-        # 确保outputs目录存在
-        outputs_dir = Path(__file__).parent / "outputs"
-        os.makedirs(outputs_dir, exist_ok=True)
+        # 确保必要的目录存在
+        misc._ensure_directories()
         
     async def initialize(self):
         try:
@@ -383,7 +408,18 @@ class AstrbotPluginIndexTTS(Star):
                     "if_remove_think_tag": self.if_remove_think_tag,
                     "if_preload": self.if_preload,
                     "if_split_text": self.if_split_text,
-                    "if_remove_emoji": self.if_remove_emoji
+                    "if_remove_emoji": self.if_remove_emoji,
+                    "use_fp16": self.use_fp16,  # 添加其他可能需要的参数
+                    "use_cuda_kernel": self.use_cuda_kernel,
+                    "use_deepspeed": self.use_deepspeed,
+                    "use_emo_text": self.use_emo_text,
+                    "use_random": self.use_random,
+                    "verbose": self.verbose,
+                    "emo_alpha": self.emo_alpha,
+                    "interval_silence": self.interval_silence,
+                    "emo_audio_prompt": self.emo_audio_prompt,
+                    "emo_text": self.emo_text,
+                    "emo_vector": self.emo_vector
                 }
 
                 await manager.post_config_with_session_auth(
@@ -447,6 +483,7 @@ class AstrbotPluginIndexTTS(Star):
 
     @filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
+        '''用于触发随机文字转语音'''
         chain = event.get_result().chain
         if self.if_random_tts:
             chain = await randomtts.random_replace(
@@ -473,6 +510,24 @@ class AstrbotPluginIndexTTS(Star):
         '''
         if text != "" and text is not None:
             try:
+                params = {
+                    "use_emo_text":True
+                }
+                await manager.post_config_with_session_auth(
+                    self.server_ip,
+                    port,
+                    self.prompt_wav,
+                    self.CORRECT_API_KEY,
+                    self.model_ver,
+                    self.max_text_tokens_per_sentence,
+                    timeout_seconds = 30.0,  # 首次连接使用较短超时
+                    max_retries = 10,
+                    initial_retry_delay = 1.0,
+                    max_retry_delay = 20.0,
+                    backoff_factor = 2.0,
+                    **params
+                )
+
                 wav_path = await manager.post_generate_request_with_session_auth(
                     self.server_ip,
                     port,

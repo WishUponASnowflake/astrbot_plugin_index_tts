@@ -10,9 +10,10 @@
 
 ## 性能要求
 
-建议显卡显存大于4Gib
+建议显卡显存大于4Gib(IndexTTS 1, 1.5),或12Gib(IndexTTS 2)
+
 >[!TIP]
->建议`AMD`用户使用`WSL`或`Linux`以使用`ROCm版torch`
+>建议`AMD`用户使用`WSL`或`Linux`以使用`torch-ROCm`
 
 ## 环境配置
 
@@ -20,27 +21,26 @@
 
 ...配置虚拟环境...
 
-```bash
-cd /path/to/the/plugin
-cd index-tts
-pip install -e .
-```
-
-也可使用本插件包含的requirements.txt进行安装
+建议使用官方提供的方式安装
 
 ```bash
-cd /path/to/the/plugin
-pip install -r requirements.txt
+uv sync --extra webui --default-index "https://mirrors.aliyun.com/pypi/simple"
 ```
+
+>[!IMPORTANT]
+>目前还不知道怎么将两个uv的环境合并
+>
+>故建议如果出现问题先转用分隔式服务
 
 如果发生版本冲突，以报错为准去下载合适版本的库
 
 >[!TIP]
 >若使用 `uv` 配置环境，则需使用
 >```bash
+>cd /path/to/AstrBot
 >uv pip install xxx
 >```
->但仍推荐使用 `Conda` 作为虚拟环境
+>现已不推荐使用 `Conda` 作为虚拟环境
 
 >[!WARNING]
 >本插件目前仅在python3.10上测试，如果为Python >=`3.11` && <=`3.12`，可能不稳定
@@ -101,6 +101,8 @@ apikey默认`1145141919810`
 
 时间原因，文档写的较潦草，如有不懂或报错，请issue
 
+本次(1.0.4)更新属实匆忙，如果偶遇任何bug，请issue
+
 如果有想法，也欢迎issue
 
 如果你认为这个插件对你有帮助，请star
@@ -125,6 +127,10 @@ apikey默认`1145141919810`
     (3)优化仓库下载逻辑
     (4)添加去除emoji和分段的功能
     (5)更改临时文件储存地址
+
+`1.0.3` -> `1.0.4`:
+
+    (1)添加了对IndexTTS的支持
 
 >[!NOTE]
 >对于每次更新，建议将原先版本的配置文件删除后再更新，以防出现错误
