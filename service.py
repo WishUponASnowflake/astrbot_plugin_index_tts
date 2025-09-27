@@ -237,7 +237,7 @@ class TTSService:
         # 添加必要的路径到sys.path
         sys.path.insert(0, os.path.join(self.dir_path, "index-tts"))
 
-    async def DownloadModel(self, model_ver="1.5"):
+    async def DownloadModel(self, model_ver=None):
         """下载并加载TTS模型"""
         model_ver = model_ver or self.model_ver
         if model_ver not in ["1", "1.5", "2"]:
@@ -266,7 +266,7 @@ class TTSService:
         else:
             logging.warning(f"Model path {actual_model_path} already exists, skipping download.")
 
-    async def load_model(self, model_ver="1.5"):
+    async def load_model(self, model_ver=None):
         """加载TTS模型"""
         model_ver = model_ver or self.model_ver
 
@@ -323,7 +323,7 @@ class TTSService:
         self.if_loaded = True
         return self.model
     
-    async def infer(self, text_list, output_wav_list = [], emo_audio_prompt=None, emo_alpha=1.0, emo_vector=None,use_emo_text=False, emo_text=None, use_random=False, model_ver="1", model=None):
+    async def infer(self, text_list, output_wav_list = [], emo_audio_prompt=None, emo_alpha=1.0, emo_vector=None,use_emo_text=False, emo_text=None, use_random=False, model_ver=None, model=None):
 
         model_ver = model_ver if model_ver else self.model_ver
         model = model if model else self.model
@@ -470,7 +470,7 @@ async def generate_speech(
 
         output_wav_list = []  # 用于存储每段生成的音频文件路径
 
-        await service.infer(text_list,output_wav_list)
+        await service.infer(text_list, output_wav_list = [], emo_audio_prompt=service.emo_audio_prompt, emo_alpha=service.emo_alpha, emo_vector=service.emo_vector,use_emo_text=service.use_emo_text, emo_text=service.emo_text, use_random=service.use_random, model_ver=service.model_ver, model=service.model)
 
         if len(output_wav_list) == 1:
             output_path = output_wav_list[0]
